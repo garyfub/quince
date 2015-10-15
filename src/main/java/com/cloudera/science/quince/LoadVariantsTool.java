@@ -130,7 +130,7 @@ public class LoadVariantsTool extends Configured implements Tool {
               CrunchUtils.partitionAndSortUsingShuffle(records, segmentSize, sampleGroup,
                   sampleSet, variantsOnly, numReducers);
     } else {
-      partitioned = CrunchUtils.partitionAndSortByPosition(records, segmentSize,
+      partitioned = CrunchUtils.partition(records, segmentSize,
           sampleGroup, sampleSet, variantsOnly, numReducers);
     }
 

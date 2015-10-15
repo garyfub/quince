@@ -115,6 +115,14 @@ public final class CrunchUtils {
     return partitionedAndSortedRecords;
   }
 
+  public static PTable<String, FlatVariantCall> partition(
+      PCollection<Variant> records, long segmentSize, String sampleGroup, Set<String> samples,
+      boolean variantsOnly, int numReducers) {
+
+    return records.parallelDo(new ExtractKeysFromVariantAndFlatten(segmentSize, sampleGroup),
+        tableOf(strings(), Avros.specifics(FlatVariantCall.class)));
+  }
+
   public static String extractPartitionKey(Variant variant, long segmentSize,
       String sampleGroup) {
     StringBuilder sb = new StringBuilder();
@@ -201,6 +209,29 @@ public final class CrunchUtils {
       return Pair.of(partitionKey, Pair.of(input.getStart(), input));
     }
   }
+
+  /*
+ * Turns a variant call into a (partition key, flat, variant call) pair.
+ */
+  private static final class ExtractKeysFromVariantAndFlatten
+      extends DoFn<Variant, Pair<String, FlatVariantCall>> {
+    private long segmentSize;
+    private String sampleGroup;
+
+    private ExtractKeysFromVariantAndFlatten(long segmentSize, String sampleGroup) {
+      this.segmentSize = segmentSize;
+      this.sampleGroup = sampleGroup;
+    }
+
+    @Override
+    public void process(Variant variant, Emitter<Pair<String, FlatVariantCall>> emitter) {
+      String partitionKey = extractPartitionKey(variant, segmentSize, sampleGroup);
+      for (Call call : variant.getCalls()) {
+        emitter.emit(Pair.of(partitionKey, flatten(variant, call)));
+      }
+    }
+  }
+
 
   /*
    * Turns a variant call into a (partition key, variant call) pair.
