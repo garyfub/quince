@@ -123,7 +123,8 @@ public class LoadVariantsToolIT {
     String input = "datasets/variants_vcf";
     String output = "target/datasets/variants_flat_locuspart";
 
-    int exitCode = tool.run(new String[]{"--sample-group", sampleGroup, input, output});
+    int exitCode = tool.run(new String[]{"--sample-group", sampleGroup,
+        "--sort-by-sample", input, output});
 
     assertEquals(0, exitCode);
     File partition = new File(baseDir,
@@ -165,7 +166,7 @@ public class LoadVariantsToolIT {
     String output = "target/datasets/variants_flat_locuspart";
 
     int exitCode = tool.run(new String[]{"--sample-group", sampleGroup,
-        "--sort-reduce-side", input, output});
+        "--sort-by-sample", "--sort-reduce-side", input, output});
 
     assertEquals(0, exitCode);
     File partition = new File(baseDir,
@@ -196,6 +197,46 @@ public class LoadVariantsToolIT {
   }
 
   @Test
+  public void testSortByPosition() throws Exception {
+
+    String baseDir = "target/datasets";
+
+    FileUtil.fullyDelete(new File(baseDir));
+
+    String input = "datasets/variants_vcf";
+    String output = "target/datasets/variants_flat_locuspart";
+
+    int exitCode = tool.run(new String[]{input, output});
+
+    assertEquals(0, exitCode);
+    File partition = new File(baseDir,
+        "variants_flat_locuspart/chr=1/pos=0/sample_group=default");
+    assertTrue(partition.exists());
+
+    File[] dataFiles = partition.listFiles(new HiddenFileFilter());
+
+    assertEquals(1, dataFiles.length);
+    assertTrue(dataFiles[0].getName().endsWith(".parquet"));
+
+    AvroParquetReader<FlatVariantCall> parquetReader =
+        new AvroParquetReader<>(new Path(dataFiles[0].toURI()));
+
+    // first record has first sample (call set) ID
+    FlatVariantCall flat1 = parquetReader.read();
+    assertEquals(".", flat1.getId());
+    assertEquals("1", flat1.getReferenceName());
+    assertEquals(14396L, flat1.getStart().longValue());
+    assertEquals(14400L, flat1.getEnd().longValue());
+    assertEquals("CTGT", flat1.getReferenceBases());
+    assertEquals("C", flat1.getAlternateBases1());
+    assertEquals("NA12878", flat1.getCallSetId());
+    assertEquals(0, flat1.getGenotype1().intValue());
+    assertEquals(1, flat1.getGenotype2().intValue());
+
+    checkSortedByStart(dataFiles[0], 15);
+  }
+
+  @Test
   public void testRestrictSamples() throws Exception {
 
     String baseDir = "target/datasets";
@@ -207,7 +248,7 @@ public class LoadVariantsToolIT {
     String output = "target/datasets/variants_flat_locuspart";
 
     int exitCode = tool.run(new String[]{"--sample-group", sampleGroup,
-        "--samples", "NA12878,NA12892", input, output});
+        "--sort-by-sample", "--samples", "NA12878,NA12892", input, output});
 
     assertEquals(0, exitCode);
     File partition = new File(baseDir,
@@ -247,7 +288,7 @@ public class LoadVariantsToolIT {
     String input = "datasets/variants_vcf";
     String output = "target/datasets/variants_flat_locuspart";
 
-    int exitCode = tool.run(new String[]{"--variants-only", input, output});
+    int exitCode = tool.run(new String[]{"--variants-only",input, output});
 
     assertEquals(0, exitCode);
     File partition = new File(baseDir,

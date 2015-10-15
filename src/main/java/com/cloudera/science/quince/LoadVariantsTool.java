@@ -74,6 +74,11 @@ public class LoadVariantsTool extends Configured implements Tool {
       description="The number of base pairs in each segment partition.")
   private long segmentSize = 1000000;
 
+  @Parameter(names="--sort-by-sample",
+      description="Sort by sample, then position, within each partition. If not set " +
+          "(the default) then only sort by position within each partition.")
+  private boolean sortBySample = false;
+
   @Parameter(names="--sort-reduce-side",
       description="Sorting is done on the reduce side (takes more memory) rather than " +
           "using the shuffle (slower).")
@@ -116,12 +121,18 @@ public class LoadVariantsTool extends Configured implements Tool {
     Set<String> sampleSet = samples == null ? null :
         Sets.newLinkedHashSet(Splitter.on(',').split(samples));
 
-    PTable<String, FlatVariantCall> partitioned =
-        sortReduceSide ?
-        CrunchUtils.partitionAndSortReduceSide(records, segmentSize, sampleGroup,
-            sampleSet, variantsOnly, numReducers) :
-        CrunchUtils.partitionAndSortUsingShuffle(records, segmentSize, sampleGroup,
-            sampleSet, variantsOnly, numReducers);
+    PTable<String, FlatVariantCall> partitioned;
+    if (sortBySample || variantsOnly) {
+      partitioned =
+          sortReduceSide ?
+              CrunchUtils.partitionAndSortReduceSide(records, segmentSize, sampleGroup,
+                  sampleSet, variantsOnly, numReducers) :
+              CrunchUtils.partitionAndSortUsingShuffle(records, segmentSize, sampleGroup,
+                  sampleSet, variantsOnly, numReducers);
+    } else {
+      partitioned = CrunchUtils.partitionAndSortByPosition(records, segmentSize,
+          sampleGroup, sampleSet, variantsOnly, numReducers);
+    }
 
     try {
       Path outputPath = new Path(outputPathString);
