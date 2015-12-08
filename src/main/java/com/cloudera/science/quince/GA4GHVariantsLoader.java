@@ -15,10 +15,14 @@
 
 package com.cloudera.science.quince;
 
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Lists;
 import java.io.IOException;
+import java.util.List;
 import java.util.Set;
 import org.apache.avro.mapred.AvroKey;
 import org.apache.avro.mapreduce.AvroKeyInputFormat;
+import org.apache.avro.specific.SpecificData;
 import org.apache.avro.specific.SpecificRecord;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
@@ -29,12 +33,14 @@ import org.apache.spark.api.java.JavaPairRDD;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.api.java.function.Function;
+import org.apache.spark.api.java.function.PairFlatMapFunction;
 import org.apache.spark.broadcast.Broadcast;
 import org.ga4gh.models.FlatVariantCall;
 import org.ga4gh.models.Variant;
 import org.opencb.hpg.bigdata.core.converters.variation.VariantContext2VariantConverter;
 import org.seqdoop.hadoop_bam.VCFInputFormat;
 import org.seqdoop.hadoop_bam.VariantContextWritable;
+import scala.Tuple2;
 import scala.Tuple3;
 
 public class GA4GHVariantsLoader extends VariantsLoader {
@@ -93,5 +99,62 @@ public class GA4GHVariantsLoader extends VariantsLoader {
       throw new IllegalStateException("Unrecognized input format: " + inputFormat);
     }
     return variants;
+  }
+
+  @Override
+  protected JavaPairRDD<Tuple3<String, Long, String>, SpecificRecord>
+    expandGvcfBlocks(JavaPairRDD<Tuple3<String, Long, String>, SpecificRecord> records,
+      long segmentSize) {
+    return records.flatMapToPair(new ExpandGvcfBlocksFn(segmentSize));
+  }
+
+  private static class ExpandGvcfBlocksFn implements
+      PairFlatMapFunction<Tuple2<Tuple3<String, Long, String>, SpecificRecord>,
+          Tuple3<String, Long, String>, SpecificRecord> {
+
+    private long segmentSize;
+
+    public ExpandGvcfBlocksFn(long segmentSize) {
+      this.segmentSize = segmentSize;
+    }
+
+    @Override
+    public Iterable<Tuple2<Tuple3<String, Long, String>, SpecificRecord>>
+      call(Tuple2<Tuple3<String, Long, String>, SpecificRecord> input) {
+
+      SpecificRecord record = input._2();
+      if (record instanceof FlatVariantCall) {
+        FlatVariantCall v = (FlatVariantCall) record;
+        boolean block = v.getAlternateBases1().equals("") // <NON_REF>
+            && v.getAlternateBases2() == null;
+        if (block) {
+          List<Tuple2<Tuple3<String, Long, String>, SpecificRecord>> tuples =
+              Lists.newArrayList();
+          Tuple3<String, Long, String> key = input._1();
+          long start = v.getStart();
+          long end = v.getEnd();
+          long segmentStart = getRangeStart(segmentSize, start);
+          long segmentEnd = getRangeStart(segmentSize, end);
+          for (long pos = start; pos < end; pos++) {
+            FlatVariantCall vCopy = SpecificData.get().deepCopy(v.getSchema(), v);
+            vCopy.setStart(pos);
+            vCopy.setEnd(pos + 1);
+            if (pos > start) {
+              // set reference to unknown (TODO: broadcast ref so we can set correctly)
+              vCopy.setReferenceBases(""); // set reference to unknown
+            }
+            Tuple3<String, Long, String> newKey = (segmentStart == segmentEnd) ?
+                  // block is contained in one segment
+                  key :
+                  // block spans multiple segments, so need to update key with correct pos
+                  new Tuple3<>(key._1(), getRangeStart(segmentSize, pos), key._3());
+            tuples.add(new Tuple2<>(newKey, (SpecificRecord) vCopy));
+          }
+          return tuples;
+        }
+      }
+      // TODO: Variant
+      return ImmutableList.of(input);
+    }
   }
 }

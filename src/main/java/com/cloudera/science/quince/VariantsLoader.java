@@ -62,6 +62,18 @@ public abstract class VariantsLoader {
   protected abstract Class getSpecificRecordType(boolean variantsOnly, boolean flatten);
 
   /**
+   * Expand gVCF blocks into a record per site.
+   * @param records sorted keyed variants
+   * @param segmentSize the number of base pairs in each segment partition
+   * @return sorted keyed variants with one variant per site
+   */
+  protected JavaPairRDD<Tuple3<String, Long, String>, SpecificRecord>
+    expandGvcfBlocks(JavaPairRDD<Tuple3<String, Long, String>, SpecificRecord> records,
+      long segmentSize) {
+    return records; // do nothing by default
+  }
+
+  /**
    * Load and partition variants.
    * key = (contig, pos, sample_group); value = Variant/Call Avro object
    * @param inputFormat the format of the input data (VCF, AVRO, or PARQUET)
@@ -74,6 +86,7 @@ public abstract class VariantsLoader {
    * @param samples the samples to include
    * @param redistribute whether to repartition the data by locus/sample group
    * @param segmentSize the number of base pairs in each segment partition
+   * @param expandGvcfBlocks whether to expand gVCF blocks into a record per site
    * @param numReducers the number of reducers to use
    * @return the keyed variant or call records
    * @throws IOException if an I/O error is encountered during loading
@@ -81,7 +94,8 @@ public abstract class VariantsLoader {
   public JavaRDD<GenericRecord> loadPartitionedVariants(
       String inputFormat, Path inputPath, Configuration conf,
       JavaSparkContext context, boolean variantsOnly, boolean flatten, String sampleGroup,
-      Set<String> samples, boolean redistribute, long segmentSize, int numReducers)
+      Set<String> samples, boolean redistribute, long segmentSize,
+      boolean expandGvcfBlocks, int numReducers)
       throws IOException {
     JavaPairRDD<Tuple3<String, Long, String>, SpecificRecord> locusSampleKeyedRecords =
         loadKeyedRecords(inputFormat, inputPath, conf, context, variantsOnly, flatten,
@@ -98,6 +112,10 @@ public abstract class VariantsLoader {
     } else {
       // input data assumed to be already globally sorted
       sortedRecords = locusSampleKeyedRecords;
+    }
+
+    if (expandGvcfBlocks) {
+      sortedRecords = expandGvcfBlocks(sortedRecords, segmentSize);
     }
 
     // add the partition columns - note that we add fields to the avro record

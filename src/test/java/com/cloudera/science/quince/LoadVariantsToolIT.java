@@ -427,7 +427,7 @@ public class LoadVariantsToolIT {
     checkSortedByStart(dataFiles[0], 30);
   }
 
-  private void checkSortedByStart(File file, int expectedCount) throws IOException {
+  static void checkSortedByStart(File file, int expectedCount) throws IOException {
     // check records are sorted by start position
     ParquetReader<GenericRecord> parquetReader =
         AvroParquetReader.<GenericRecord>builder(new Path(file.toURI())).build();
@@ -455,7 +455,7 @@ public class LoadVariantsToolIT {
     assertEquals(expectedCount, actualCount);
   }
 
-  private static class HiddenFileFilter implements FileFilter {
+  static class HiddenFileFilter implements FileFilter {
     @Override
     public boolean accept(File pathname) {
       return !pathname.getName().startsWith(".") && !pathname.getName().startsWith("_");
