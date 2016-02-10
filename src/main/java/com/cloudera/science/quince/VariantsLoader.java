@@ -16,21 +16,21 @@
 package com.cloudera.science.quince;
 
 import java.io.IOException;
+import java.io.Serializable;
+import java.util.Comparator;
 import java.util.Set;
+import org.apache.avro.Schema;
+import org.apache.avro.generic.GenericRecord;
 import org.apache.avro.specific.SpecificRecord;
-import org.apache.crunch.DoFn;
-import org.apache.crunch.Emitter;
-import org.apache.crunch.MapFn;
-import org.apache.crunch.PTable;
-import org.apache.crunch.Pair;
-import org.apache.crunch.Pipeline;
-import org.apache.crunch.Tuple3;
-import org.apache.crunch.lib.SecondarySort;
-import org.apache.crunch.types.PTableType;
-import org.apache.crunch.types.PType;
-import org.apache.crunch.types.avro.Avros;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
+import org.apache.spark.api.java.JavaPairRDD;
+import org.apache.spark.api.java.JavaRDD;
+import org.apache.spark.api.java.JavaSparkContext;
+import org.apache.spark.api.java.function.Function;
+import org.apache.spark.api.java.function.PairFunction;
+import scala.Tuple2;
+import scala.Tuple3;
 
 /*
  * Loads variants from input files (which may be VCF, Avro, or Parquet), converts
@@ -39,16 +39,13 @@ import org.apache.hadoop.fs.Path;
  */
 public abstract class VariantsLoader {
 
-  protected static PType<Tuple3<String, Long, String>> KEY_PTYPE =
-      Avros.triples(Avros.strings(), Avros.longs(), Avros.strings());
-
   /**
    * Load variants and extract a key.
    * key = (contig, pos, sample_group); value = Variant/Call Avro object
    * @param inputFormat the format of the input data (VCF, AVRO, or PARQUET)
    * @param inputPath the input data path
    * @param conf the Hadoop configuration
-   * @param pipeline the Crunch pipeline
+   * @param context the Spark context
    * @param variantsOnly whether to ignore samples and only load variants
    * @param flatten whether to flatten the data types
    * @param sampleGroup an identifier for the group of samples being loaded
@@ -56,11 +53,13 @@ public abstract class VariantsLoader {
    * @return the keyed variant or call records
    * @throws IOException if an I/O error is encountered during loading
    */
-  protected abstract PTable<Tuple3<String, Long, String>, SpecificRecord>
+  protected abstract JavaPairRDD<Tuple3<String, Long, String>, SpecificRecord>
       loadKeyedRecords(String inputFormat, Path inputPath, Configuration conf,
-          Pipeline pipeline, boolean variantsOnly, boolean flatten, String sampleGroup,
+          JavaSparkContext context, boolean variantsOnly, boolean flatten, String sampleGroup,
           Set<String> samples)
       throws IOException;
+
+  protected abstract Class getSpecificRecordType(boolean variantsOnly, boolean flatten);
 
   /**
    * Load and partition variants.
@@ -68,7 +67,7 @@ public abstract class VariantsLoader {
    * @param inputFormat the format of the input data (VCF, AVRO, or PARQUET)
    * @param inputPath the input data path
    * @param conf the Hadoop configuration
-   * @param pipeline the Crunch pipeline
+   * @param context the Spark context
    * @param variantsOnly whether to ignore samples and only load variants
    * @param flatten whether to flatten the data types
    * @param sampleGroup an identifier for the group of samples being loaded
@@ -79,89 +78,69 @@ public abstract class VariantsLoader {
    * @return the keyed variant or call records
    * @throws IOException if an I/O error is encountered during loading
    */
-  public PTable<String, SpecificRecord> loadPartitionedVariants(
+  public JavaRDD<GenericRecord> loadPartitionedVariants(
       String inputFormat, Path inputPath, Configuration conf,
-      Pipeline pipeline, boolean variantsOnly, boolean flatten, String sampleGroup,
+      JavaSparkContext context, boolean variantsOnly, boolean flatten, String sampleGroup,
       Set<String> samples, boolean redistribute, long segmentSize, int numReducers)
       throws IOException {
-    PTable<Tuple3<String, Long, String>, SpecificRecord> locusSampleKeyedRecords =
-        loadKeyedRecords(inputFormat, inputPath, conf, pipeline, variantsOnly, flatten,
+    JavaPairRDD<Tuple3<String, Long, String>, SpecificRecord> locusSampleKeyedRecords =
+        loadKeyedRecords(inputFormat, inputPath, conf, context, variantsOnly, flatten,
             sampleGroup, samples);
 
     // execute a DISTRIBUTE BY operation if requested
-    PTable<Tuple3<String, Long, String>, SpecificRecord> sortedRecords;
+    JavaPairRDD<Tuple3<String, Long, String>, SpecificRecord> sortedRecords;
     if (redistribute) {
-      // partitionKey(chr, chrSeg, sampleGroup), Pair(secondaryKey/pos, originalDatum)
-      PTableType<Tuple3<String, Long, String>,
-          Pair<Long,
-              Pair<Tuple3<String, Long, String>, SpecificRecord>>> reKeyedPType =
-          Avros.tableOf(Avros.triples(Avros.strings(), Avros.longs(), Avros.strings()),
-              Avros.pairs(Avros.longs(),
-                  Avros.pairs(locusSampleKeyedRecords.getKeyType(),
-                      locusSampleKeyedRecords.getValueType())));
-      PTable<Tuple3<String, Long, String>,
-          Pair<Long, Pair<Tuple3<String, Long, String>, SpecificRecord>>> reKeyed =
-          locusSampleKeyedRecords.parallelDo("Re-keying for redistribution",
-              new ReKeyDistributeByFn(segmentSize), reKeyedPType);
-      // repartition and sort by pos
-      sortedRecords = SecondarySort.sortAndApply(
-          reKeyed, new UnKeyForDistributeByFn(),
-          locusSampleKeyedRecords.getPTableType(), numReducers);
+      Comparator<Tuple3<String, Long, String>> comparator =
+          new DistributeComparator(segmentSize);
+      sortedRecords = numReducers > 0 ?
+          locusSampleKeyedRecords.sortByKey(comparator, true, numReducers) :
+          locusSampleKeyedRecords.sortByKey(comparator);
     } else {
       // input data assumed to be already globally sorted
       sortedRecords = locusSampleKeyedRecords;
     }
 
-    // generate the partition keys
-    return sortedRecords.mapKeys("Generate partition keys",
-        new LocusSampleToPartitionFn(segmentSize, sampleGroup), Avros.strings());
+    // add the partition columns - note that we add fields to the avro record
+    // converting a Specific record to a Generic record (c.f. Crunch, where the partition
+    // keys were separate from the record).
+    return sortedRecords.map(new PartitionFn(segmentSize, sampleGroup));
   }
 
-  /**
-   * Function to change the key to (contig, segment, sample_group) and the value to
-   * (pos, record).
-   */
-  public static final class ReKeyDistributeByFn
-      extends MapFn<Pair<Tuple3<String, Long, String>, SpecificRecord>,
-      Pair<Tuple3<String, Long, String>,
-          Pair<Long, Pair<Tuple3<String, Long, String>, SpecificRecord>>>> {
+  public static final class DistributeComparator implements
+      Comparator<Tuple3<String, Long, String>>, Serializable {
     private long segmentSize;
 
-    public ReKeyDistributeByFn(long segmentSize) {
+    public DistributeComparator(long segmentSize) {
       this.segmentSize = segmentSize;
     }
-
     @Override
-    public Pair<Tuple3<String, Long, String>,
-        Pair<Long, Pair<Tuple3<String, Long, String>, SpecificRecord>>> map(
-        Pair<Tuple3<String, Long, String>, SpecificRecord> input) {
-      Tuple3<String, Long, String> key = input.first();
-      String chr = key.first();
-      long pos = key.second();
-      String sampleGroup = key.third();
-      long segment = getRangeStart(segmentSize, pos);
-      return Pair.of(Tuple3.of(chr, segment, sampleGroup), Pair.of(pos, input));
-    }
-  }
+    public int compare(Tuple3<String, Long, String> o1, Tuple3<String, Long, String> o2) {
 
-  /**
-   * Function to reverse the effect of {@link ReKeyDistributeByFn}.
-   */
-  public static final class UnKeyForDistributeByFn
-      extends DoFn<Pair<Tuple3<String, Long, String>,
-      Iterable<Pair<Long, Pair<Tuple3<String, Long, String>,
-          SpecificRecord>>>>,
-      Pair<Tuple3<String, Long, String>, SpecificRecord>> {
-    @Override
-    public void process(
-        Pair<Tuple3<String, Long, String>,
-            Iterable<Pair<Long,
-                Pair<Tuple3<String, Long, String>, SpecificRecord>>>> input,
-        Emitter<Pair<Tuple3<String, Long, String>, SpecificRecord>> emitter) {
-      for (Pair<Long,
-          Pair<Tuple3<String, Long, String>, SpecificRecord>> pair : input.second()) {
-        emitter.emit(pair.second());
+      // Compare by (chr, chrSeg, sampleGroup) then by pos
+      String chr1 = o1._1();
+      long pos1 = o1._2();
+      String sampleGroup1 = o1._3();
+      long segment1 = getRangeStart(segmentSize, pos1);
+
+      String chr2 = o2._1();
+      long pos2 = o2._2();
+      String sampleGroup2 = o2._3();
+      long segment2 = getRangeStart(segmentSize, pos2);
+
+      int cmp = chr1.compareTo(chr2);
+      if (cmp != 0) {
+        return cmp;
       }
+      cmp = Long.compare(segment1, segment2);
+      if (cmp != 0) {
+        return cmp;
+      }
+      cmp = sampleGroup1.compareTo(sampleGroup2);
+      if (cmp != 0) {
+        return cmp;
+      }
+
+      return Long.compare(pos1, pos2);
     }
   }
 
@@ -170,7 +149,9 @@ public abstract class VariantsLoader {
    * partition key.
    */
   public static final class LocusSampleToPartitionFn
-      extends MapFn<Tuple3<String, Long, String>, String> {
+      implements PairFunction<Tuple2<Tuple3<String, Long, String>, SpecificRecord>,
+              String, SpecificRecord> {
+
     private long segmentSize;
     private String sampleGroup;
 
@@ -180,14 +161,47 @@ public abstract class VariantsLoader {
     }
 
     @Override
-    public String map(Tuple3<String, Long, String> input) {
+    public Tuple2<String, SpecificRecord> call(Tuple2<Tuple3<String, Long, String>,
+        SpecificRecord> pair) {
+      Tuple3<String, Long, String> input = pair._1();
       StringBuilder sb = new StringBuilder();
-      sb.append("chr=").append(input.first());
-      sb.append("/pos=").append(getRangeStart(segmentSize, input.second()));
+      sb.append("chr=").append(input._1());
+      sb.append("/pos=").append(getRangeStart(segmentSize, input._2()));
       if (sampleGroup != null) {
         sb.append("/sample_group=").append(sampleGroup);
       }
-      return sb.toString();
+      return new Tuple2<>(sb.toString(), pair._2());
+    }
+  }
+
+  /**
+   * Function to add partition key fields (chr, pos, sample group) to an Avro record.
+   * The record is changed to a GenericRecord in the process, since we don't have
+   * generated classes (Specific) for any the types (Variant etc) with the partition key
+   * fields.
+   */
+  public static final class PartitionFn
+      implements Function<Tuple2<Tuple3<String, Long, String>, SpecificRecord>,
+            GenericRecord> {
+
+    private long segmentSize;
+    private String sampleGroup;
+
+    public PartitionFn(long segmentSize, String sampleGroup) {
+      this.segmentSize = segmentSize;
+      this.sampleGroup = sampleGroup;
+    }
+
+    @Override
+    public GenericRecord call(Tuple2<Tuple3<String, Long, String>,
+        SpecificRecord> pair) {
+      Tuple3<String, Long, String> input = pair._1();
+      SpecificRecord record = pair._2();
+      Schema newSchema = AvroUtils.addPartitionColumns(record.getSchema(),
+          sampleGroup != null);
+      String chr = input._1();
+      long pos = getRangeStart(segmentSize, input._2());
+      return AvroUtils.addPartitionColumns(record, newSchema, chr, pos, sampleGroup);
     }
   }
 

@@ -15,26 +15,26 @@
 
 package com.cloudera.science.quince;
 
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Lists;
+import java.util.List;
 import java.util.Set;
 import org.apache.avro.specific.SpecificRecord;
-import org.apache.crunch.DoFn;
-import org.apache.crunch.Emitter;
-import org.apache.crunch.Pair;
-import org.apache.crunch.Tuple3;
-import org.bdgenomics.formats.avro.FlatGenotype;
-import org.bdgenomics.formats.avro.FlatVariant;
+import org.apache.spark.api.java.function.PairFlatMapFunction;
 import org.bdgenomics.formats.avro.Genotype;
 import org.bdgenomics.formats.avro.Variant;
 
 import java.util.Collection;
+import scala.Tuple2;
+import scala.Tuple3;
 
 /**
  * Extract the key from an ADAM {@link Variant} and optionally flatten the record and
  * expand genotype calls.
  */
-public class ADAMToKeyedSpecificRecordFn extends
-    DoFn<Pair<org.bdgenomics.formats.avro.Variant, Collection<Genotype>>,
-         Pair<Tuple3<String, Long, String>, SpecificRecord>> {
+public class ADAMToKeyedSpecificRecordFn
+    implements PairFlatMapFunction<Tuple2<Variant, Collection<Genotype>>,
+    Tuple3<String, Long, String>, SpecificRecord> {
   private boolean variantsOnly;
   private boolean flatten;
   private String sampleGroup;
@@ -49,41 +49,26 @@ public class ADAMToKeyedSpecificRecordFn extends
   }
 
   @Override
-  public void process(Pair<org.bdgenomics.formats.avro.Variant, Collection<Genotype>> input,
-                      Emitter<Pair<Tuple3<String, Long, String>, SpecificRecord>> emitter) {
-    Variant variant = input.first();
+  public Iterable<Tuple2<Tuple3<String, Long, String>, SpecificRecord>>
+    call(Tuple2<Variant, Collection<Genotype>> input) {
+    Variant variant = input._1();
     String contig = variant.getContig().getContigName();
     long pos = variant.getStart();
     if (variantsOnly) {
-      Tuple3<String, Long, String> key = Tuple3.of(contig, pos, sampleGroup);
+      Tuple3<String, Long, String> key = new Tuple3<>(contig, pos, sampleGroup);
       SpecificRecord sr = flatten ? ADAMVariantFlattener.flattenVariant(variant) : variant;
-      emitter.emit(Pair.of(key, sr));
+      return ImmutableList.of(new Tuple2<>(key, sr));
     } else {  // genotype calls
-      for (Genotype genotype : input.second()) {
+      List<Tuple2<Tuple3<String, Long, String>, SpecificRecord>> tuples =
+          Lists.newArrayList();
+      for (Genotype genotype : input._2()) {
         if (samples == null || samples.contains(genotype.getSampleId())) {
-          Tuple3<String, Long, String> key = Tuple3.of(contig, pos, sampleGroup);
+          Tuple3<String, Long, String> key = new Tuple3<>(contig, pos, sampleGroup);
           SpecificRecord sr = flatten ? ADAMVariantFlattener.flattenGenotype(genotype) : genotype;
-          emitter.emit(Pair.of(key, sr));
+          tuples.add(new Tuple2<>(key, sr));
         }
       }
-    }
-  }
-
-  @Override
-  public float scaleFactor() {
-    // See comment in {@link GA4GHToKeyedSpecificRecordFn}.
-    return variantsOnly ? super.scaleFactor() : 3.0f;
-  }
-
-  public Class getSpecificRecordType() {
-    if (variantsOnly && flatten) {
-      return FlatVariant.class;
-    } else if (variantsOnly && !flatten) {
-      return Variant.class;
-    } else if (!variantsOnly && flatten) {
-      return FlatGenotype.class;
-    } else {  // !variantsOnly && !flatten
-      return Genotype.class;
+      return tuples;
     }
   }
 }

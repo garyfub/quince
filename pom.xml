@@ -25,41 +25,19 @@ License.
 
   <dependencies>
     <dependency>
-      <groupId>org.apache.crunch</groupId>
-      <artifactId>crunch-core</artifactId>
-      <version>0.10.0-hadoop2</version>
+      <groupId>org.apache.spark</groupId>
+      <artifactId>spark-core_2.10</artifactId>
+      <version>1.5.2</version>
     </dependency>
     <dependency>
-      <groupId>org.apache.hadoop</groupId>
-      <artifactId>hadoop-client</artifactId>
-      <version>2.6.0</version>
-      <scope>provided</scope>
-      <exclusions>
-        <exclusion>
-          <groupId>asm</groupId>
-          <artifactId>asm</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>org.jboss.netty</groupId>
-          <artifactId>netty</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>org.codehaus.jackson</groupId>
-          <artifactId>*</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>org.sonatype.sisu.inject</groupId>
-          <artifactId>*</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>javax.servlet</groupId>
-          <artifactId>servlet-api</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>com.google.guava</groupId>
-          <artifactId>guava</artifactId>
-        </exclusion>
-      </exclusions>
+      <groupId>org.apache.spark</groupId>
+      <artifactId>spark-sql_2.10</artifactId>
+      <version>1.5.2</version>
+    </dependency>
+    <dependency>
+      <groupId>com.databricks</groupId>
+      <artifactId>spark-avro_2.10</artifactId>
+      <version>2.0.2-SNAPSHOT</version>
     </dependency>
     <dependency>
       <groupId>org.opencb.ga4gh</groupId>
@@ -77,15 +55,20 @@ License.
       <version>1.7.7</version>
     </dependency>
     <dependency>
-      <groupId>com.twitter</groupId>
+      <groupId>org.apache.parquet</groupId>
       <artifactId>parquet-avro</artifactId>
-      <version>1.6.0</version>
+      <version>1.7.0</version> <!-- same as spark-sql version -->
       <exclusions>
         <exclusion>
           <groupId>org.apache.hadoop</groupId>
           <artifactId>hadoop-core</artifactId>
         </exclusion>
       </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.parquet</groupId>
+      <artifactId>parquet-scala_2.10</artifactId>
+      <version>1.7.0</version> <!-- same as spark-sql version -->
     </dependency>
     <dependency>
       <groupId>com.beust</groupId>
@@ -110,12 +93,6 @@ License.
       <groupId>org.bdgenomics.adam</groupId>
       <artifactId>adam-core_2.10</artifactId>
       <version>0.18.0</version>
-    </dependency>
-    <!-- TODO: This is purely to get access to the Logging trait, which is insane-->
-    <dependency>
-      <groupId>org.apache.spark</groupId>
-      <artifactId>spark-core_2.10</artifactId>
-      <version>1.5.1</version>
     </dependency>
 
     <!-- dependencies for loading from VCF -->

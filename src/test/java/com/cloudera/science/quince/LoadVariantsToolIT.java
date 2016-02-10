@@ -22,16 +22,16 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
 
+import org.apache.avro.generic.GenericRecord;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.fs.Path;
-import org.ga4gh.models.FlatVariantCall;
+import org.apache.parquet.avro.AvroParquetReader;
+import org.apache.parquet.hadoop.ParquetReader;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.contrib.java.lang.system.SystemOutRule;
-import parquet.avro.AvroParquetReader;
-import parquet.hadoop.ParquetReader;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
@@ -133,20 +133,20 @@ public class LoadVariantsToolIT {
     File partition = new File(baseDir, "variants_out/chr=1/pos=0/sample_group=default");
     File[] dataFiles = partition.listFiles(new HiddenFileFilter());
 
-    ParquetReader<FlatVariantCall> parquetReader =
-        AvroParquetReader.<FlatVariantCall>builder(new Path(dataFiles[0].toURI())).build();
+    ParquetReader<GenericRecord> parquetReader =
+        AvroParquetReader.<GenericRecord>builder(new Path(dataFiles[0].toURI())).build();
 
     // first record has first sample (call set) ID
-    FlatVariantCall flat1 = parquetReader.read();
-    assertEquals(".", flat1.getId());
-    assertEquals("1", flat1.getReferenceName());
-    assertEquals(14396L, flat1.getStart().longValue());
-    assertEquals(14400L, flat1.getEnd().longValue());
-    assertEquals("CTGT", flat1.getReferenceBases());
-    assertEquals("C", flat1.getAlternateBases1());
-    assertEquals("NA12878", flat1.getCallSetId());
-    assertEquals(0, flat1.getGenotype1().intValue());
-    assertEquals(1, flat1.getGenotype2().intValue());
+    GenericRecord flat1 = parquetReader.read();
+    assertEquals(".", flat1.get("id"));
+    assertEquals("1", flat1.get("referenceName"));
+    assertEquals(14396L, flat1.get("start"));
+    assertEquals(14400L, flat1.get("end"));
+    assertEquals("CTGT", flat1.get("referenceBases"));
+    assertEquals("C", flat1.get("alternateBases_1"));
+    assertEquals("NA12878", flat1.get("callSetId"));
+    assertEquals(0, flat1.get("genotype_1"));
+    assertEquals(1, flat1.get("genotype_2"));
 
     checkSortedByStart(dataFiles[0], 15);
   }
@@ -172,20 +172,20 @@ public class LoadVariantsToolIT {
     File partition = new File(baseDir, "variants_out/chr=1/pos=0/sample_group=default");
     File[] dataFiles = partition.listFiles(new HiddenFileFilter());
 
-    ParquetReader<FlatVariantCall> parquetReader =
-        AvroParquetReader.<FlatVariantCall>builder(new Path(dataFiles[0].toURI())).build();
+    ParquetReader<GenericRecord> parquetReader =
+        AvroParquetReader.<GenericRecord>builder(new Path(dataFiles[0].toURI())).build();
 
     // first record has first sample (call set) ID
-    FlatVariantCall flat1 = parquetReader.read();
-    assertEquals(".", flat1.getId());
-    assertEquals("1", flat1.getReferenceName());
-    assertEquals(14396L, flat1.getStart().longValue());
-    assertEquals(14400L, flat1.getEnd().longValue());
-    assertEquals("CTGT", flat1.getReferenceBases());
-    assertEquals("C", flat1.getAlternateBases1());
-    assertEquals("NA12878", flat1.getCallSetId());
-    assertEquals(0, flat1.getGenotype1().intValue());
-    assertEquals(1, flat1.getGenotype2().intValue());
+    GenericRecord flat1 = parquetReader.read();
+    assertEquals(".", flat1.get("id"));
+    assertEquals("1", flat1.get("referenceName"));
+    assertEquals(14396L, flat1.get("start"));
+    assertEquals(14400L, flat1.get("end"));
+    assertEquals("CTGT", flat1.get("referenceBases"));
+    assertEquals("C", flat1.get("alternateBases_1"));
+    assertEquals("NA12878", flat1.get("callSetId"));
+    assertEquals(0, flat1.get("genotype_1"));
+    assertEquals(1, flat1.get("genotype_2"));
 
     checkSortedByStart(dataFiles[0], 15);
   }
@@ -206,20 +206,20 @@ public class LoadVariantsToolIT {
     File partition = new File(baseDir, "variants_out/chr=1/pos=0/sample_group=default");
     File[] dataFiles = partition.listFiles(new HiddenFileFilter());
 
-    ParquetReader<FlatVariantCall> parquetReader =
-        AvroParquetReader.<FlatVariantCall>builder(new Path(dataFiles[0].toURI())).build();
+    ParquetReader<GenericRecord> parquetReader =
+        AvroParquetReader.<GenericRecord>builder(new Path(dataFiles[0].toURI())).build();
 
     // first record has first sample (call set) ID
-    FlatVariantCall flat1 = parquetReader.read();
-    assertEquals(".", flat1.getId());
-    assertEquals("1", flat1.getReferenceName());
-    assertEquals(14396L, flat1.getStart().longValue());
-    assertEquals(14400L, flat1.getEnd().longValue());
-    assertEquals("CTGT", flat1.getReferenceBases());
-    assertEquals("C", flat1.getAlternateBases1());
-    assertEquals("NA12878", flat1.getCallSetId());
-    assertEquals(0, flat1.getGenotype1().intValue());
-    assertEquals(1, flat1.getGenotype2().intValue());
+    GenericRecord flat1 = parquetReader.read();
+    assertEquals(".", flat1.get("id"));
+    assertEquals("1", flat1.get("referenceName"));
+    assertEquals(14396L, flat1.get("start"));
+    assertEquals(14400L, flat1.get("end"));
+    assertEquals("CTGT", flat1.get("referenceBases"));
+    assertEquals("C", flat1.get("alternateBases_1"));
+    assertEquals("NA12878", flat1.get("callSetId"));
+    assertEquals(0, flat1.get("genotype_1"));
+    assertEquals(1, flat1.get("genotype_2"));
 
     checkSortedByStart(dataFiles[0], 10);
   }
@@ -297,20 +297,25 @@ public class LoadVariantsToolIT {
     assertEquals(1, dataFiles.length);
     assertTrue(dataFiles[0].getName().endsWith(".parquet"));
 
-    ParquetReader<FlatVariantCall> parquetReader =
-        AvroParquetReader.<FlatVariantCall>builder(new Path(dataFiles[0].toURI())).build();
+    ParquetReader<GenericRecord> parquetReader =
+        AvroParquetReader.<GenericRecord>builder(new Path(dataFiles[0].toURI())).build();
 
-    FlatVariantCall fvc = parquetReader.read();
     // variants should be sorted, so this is the first one that we should see
-    assertEquals(14396L, fvc.getStart().longValue());
-    assertEquals(14400L, fvc.getEnd().longValue());
-    assertEquals("CTGT", fvc.getReferenceBases());
-    assertEquals("C", fvc.getAlternateBases1());
+    GenericRecord fvc = parquetReader.read();
+    assertEquals(".", fvc.get("id"));
+    assertEquals("1", fvc.get("referenceName"));
+    assertEquals(14396L, fvc.get("start"));
+    assertEquals(14400L, fvc.get("end"));
+    assertEquals("CTGT", fvc.get("referenceBases"));
+    assertEquals("C", fvc.get("alternateBases_1"));
+    assertEquals("NA12878", fvc.get("callSetId"));
+    assertEquals(0, fvc.get("genotype_1"));
+    assertEquals(1, fvc.get("genotype_2"));
 
     Set<String> observedSamples = new HashSet<>();
     int numCalls = 0;
     while (fvc != null) {
-      observedSamples.add(fvc.getCallSetId().toString());
+      observedSamples.add(fvc.get("callSetId").toString());
       numCalls += 1;
       fvc = parquetReader.read();
     }
@@ -361,20 +366,20 @@ public class LoadVariantsToolIT {
     assertEquals(1, dataFiles.length);
     assertTrue(dataFiles[0].getName().endsWith(".parquet"));
 
-    ParquetReader<FlatVariantCall> parquetReader =
-        AvroParquetReader.<FlatVariantCall>builder(new Path(dataFiles[0].toURI())).build();
+    ParquetReader<GenericRecord> parquetReader =
+        AvroParquetReader.<GenericRecord>builder(new Path(dataFiles[0].toURI())).build();
 
     // first record has no sample (call set)
-    FlatVariantCall flat1 = parquetReader.read();
-    assertEquals(".", flat1.getId());
-    assertEquals("1", flat1.getReferenceName());
-    assertEquals(14396L, flat1.getStart().longValue());
-    assertEquals(14400L, flat1.getEnd().longValue());
-    assertEquals("CTGT", flat1.getReferenceBases());
-    assertEquals("C", flat1.getAlternateBases1());
-    assertNull(flat1.getCallSetId());
-    assertNull(flat1.getGenotype1());
-    assertNull(flat1.getGenotype2());
+    GenericRecord flat1 = parquetReader.read();
+    assertEquals(".", flat1.get("id"));
+    assertEquals("1", flat1.get("referenceName"));
+    assertEquals(14396L, flat1.get("start"));
+    assertEquals(14400L, flat1.get("end"));
+    assertEquals("CTGT", flat1.get("referenceBases"));
+    assertEquals("C", flat1.get("alternateBases_1"));
+    assertNull(flat1.get("callSetId"));
+    assertNull(flat1.get("genotype_1"));
+    assertNull(flat1.get("genotype_2"));
 
     checkSortedByStart(dataFiles[0], 5);
   }
@@ -404,41 +409,43 @@ public class LoadVariantsToolIT {
     assertEquals(1, dataFiles.length);
     assertTrue(dataFiles[0].getName().endsWith(".parquet"));
 
-    ParquetReader<FlatVariantCall> parquetReader =
-        AvroParquetReader.<FlatVariantCall>builder(new Path(dataFiles[0].toURI())).build();
+    ParquetReader<GenericRecord> parquetReader =
+        AvroParquetReader.<GenericRecord>builder(new Path(dataFiles[0].toURI())).build();
 
     // first record has first sample (call set) ID
-    FlatVariantCall flat1 = parquetReader.read();
-    assertEquals(".", flat1.getId());
-    assertEquals("20", flat1.getReferenceName());
-    assertEquals(10000116L, flat1.getStart().longValue());
-    assertEquals(10000117L, flat1.getEnd().longValue());
-    assertEquals("C", flat1.getReferenceBases());
-    assertEquals("T", flat1.getAlternateBases1());
-    assertEquals("NA12878", flat1.getCallSetId());
-    assertEquals(0, flat1.getGenotype1().intValue());
-    assertEquals(1, flat1.getGenotype2().intValue());
+    GenericRecord flat1 = parquetReader.read();
+    assertEquals(".", flat1.get("id"));
+    assertEquals("20", flat1.get("referenceName"));
+    assertEquals(10000116L, flat1.get("start"));
+    assertEquals(10000117L, flat1.get("end"));
+    assertEquals("C", flat1.get("referenceBases"));
+    assertEquals("T", flat1.get("alternateBases_1"));
+    assertEquals("NA12878", flat1.get("callSetId"));
+    assertEquals(0, flat1.get("genotype_1"));
+    assertEquals(1, flat1.get("genotype_2"));
 
     checkSortedByStart(dataFiles[0], 30);
   }
 
   private void checkSortedByStart(File file, int expectedCount) throws IOException {
     // check records are sorted by start position
-    ParquetReader<FlatVariantCall> parquetReader =
-        AvroParquetReader.<FlatVariantCall>builder(new Path(file.toURI())).build();
+    ParquetReader<GenericRecord> parquetReader =
+        AvroParquetReader.<GenericRecord>builder(new Path(file.toURI())).build();
 
     int actualCount = 0;
 
-    FlatVariantCall flat1 = parquetReader.read();
+    GenericRecord flat1 = parquetReader.read();
     actualCount++;
 
-    Long previousStart = flat1.getStart();
+    @SuppressWarnings("unchecked")
+    Long previousStart = (Long) flat1.get("start");
     while (true) {
-      FlatVariantCall flat = parquetReader.read();
+      GenericRecord flat = parquetReader.read();
       if (flat == null) {
         break;
       }
-      Long start = flat.getStart();
+      @SuppressWarnings("unchecked")
+      Long start = (Long) flat.get("start");
       assertTrue("Should be sorted by start",
           previousStart.compareTo(start) <= 0);
       previousStart = start;
@@ -451,7 +458,7 @@ public class LoadVariantsToolIT {
   private static class HiddenFileFilter implements FileFilter {
     @Override
     public boolean accept(File pathname) {
-      return !pathname.getName().startsWith(".");
+      return !pathname.getName().startsWith(".") && !pathname.getName().startsWith("_");
     }
   }
 }

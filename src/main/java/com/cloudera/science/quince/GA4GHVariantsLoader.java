@@ -17,67 +17,78 @@ package com.cloudera.science.quince;
 
 import java.io.IOException;
 import java.util.Set;
+import org.apache.avro.mapred.AvroKey;
+import org.apache.avro.mapreduce.AvroKeyInputFormat;
 import org.apache.avro.specific.SpecificRecord;
-import org.apache.crunch.PCollection;
-import org.apache.crunch.PTable;
-import org.apache.crunch.Pipeline;
-import org.apache.crunch.Source;
-import org.apache.crunch.TableSource;
-import org.apache.crunch.Tuple3;
-import org.apache.crunch.io.From;
-import org.apache.crunch.io.parquet.AvroParquetFileSource;
-import org.apache.crunch.types.PType;
-import org.apache.crunch.types.avro.Avros;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.NullWritable;
+import org.apache.parquet.avro.AvroParquetInputFormat;
+import org.apache.spark.api.java.JavaPairRDD;
+import org.apache.spark.api.java.JavaRDD;
+import org.apache.spark.api.java.JavaSparkContext;
+import org.apache.spark.api.java.function.Function;
+import org.apache.spark.broadcast.Broadcast;
+import org.ga4gh.models.FlatVariantCall;
 import org.ga4gh.models.Variant;
+import org.opencb.hpg.bigdata.core.converters.variation.VariantContext2VariantConverter;
 import org.seqdoop.hadoop_bam.VCFInputFormat;
 import org.seqdoop.hadoop_bam.VariantContextWritable;
+import scala.Tuple3;
 
 public class GA4GHVariantsLoader extends VariantsLoader {
 
   @Override
-  public PTable<Tuple3<String, Long, String>, SpecificRecord>
-      loadKeyedRecords(String inputFormat, Path inputPath, Configuration conf,
-          Pipeline pipeline, boolean variantsOnly, boolean flatten, String sampleGroup,
-          Set<String> samples)
-      throws IOException {
-    PCollection<Variant> variants = readVariants(inputFormat, inputPath,
-        conf, pipeline, sampleGroup);
+  protected JavaPairRDD<Tuple3<String, Long, String>, SpecificRecord>
+    loadKeyedRecords(String inputFormat, Path inputPath, Configuration conf,
+        JavaSparkContext context, boolean variantsOnly, boolean flatten, String sampleGroup,
+        Set<String> samples)
+        throws IOException {
+    JavaRDD<Variant> variants = readVariants(inputFormat, inputPath,
+        conf, context, sampleGroup);
 
     GA4GHToKeyedSpecificRecordFn converter =
         new GA4GHToKeyedSpecificRecordFn(variantsOnly, flatten, sampleGroup, samples);
-    @SuppressWarnings("unchecked")
-    PType<SpecificRecord> specificPType = Avros.specifics(converter
-        .getSpecificRecordType());
-    return variants.parallelDo("Convert to keyed SpecificRecords",
-        converter, Avros.tableOf(KEY_PTYPE, specificPType));
+
+    return variants.flatMapToPair(converter);
+  }
+
+  @Override
+  protected Class getSpecificRecordType(boolean variantsOnly, boolean flatten) {
+    return flatten ? FlatVariantCall.class : Variant.class;
   }
 
   /*
    * Read input files (which may be VCF, Avro, or Parquet) and return a PCollection
    * of GA4GH Variant objects.
    */
-  private static PCollection<Variant> readVariants(String inputFormat, Path inputPath,
-      Configuration conf, Pipeline pipeline, String sampleGroup) throws IOException {
-    PCollection<Variant> variants;
+  @SuppressWarnings("unchecked")
+  private static JavaRDD<Variant> readVariants(String inputFormat, Path inputPath,
+      Configuration conf, JavaSparkContext context, String sampleGroup) throws IOException {
+    JavaRDD<Variant> variants;
     if (inputFormat.equals("VCF")) {
-      VCFToGA4GHVariantFn.configureHeaders(
+      JavaPairRDD<LongWritable, VariantContextWritable>
+          vcfRecords = context.newAPIHadoopFile(inputPath.toString(),
+            VCFInputFormat.class, LongWritable.class, VariantContextWritable.class, conf);
+      VariantContext2VariantConverter converter = VCFToGA4GHVariantFn.buildConverter(
           conf, FileUtils.findVcfs(inputPath, conf), sampleGroup);
-      TableSource<LongWritable, VariantContextWritable> vcfSource =
-          From.formattedFile(
-              inputPath, VCFInputFormat.class, LongWritable.class, VariantContextWritable.class);
-      PCollection<VariantContextWritable> vcfRecords = pipeline.read(vcfSource).values();
-      variants = vcfRecords.parallelDo(
-          "VCF to GA4GH Variant", new VCFToGA4GHVariantFn(), Avros.specifics(Variant.class));
+      Broadcast<VariantContext2VariantConverter> converterBroadcast =
+          context.broadcast(converter);
+      variants = vcfRecords.map(new VCFToGA4GHVariantFn(converterBroadcast));
     } else if (inputFormat.equals("AVRO")) {
-      variants = pipeline.read(From.avroFile(inputPath, Avros.specifics(Variant.class)));
+      variants = context.newAPIHadoopFile(inputPath.toString(), AvroKeyInputFormat.class,
+          AvroKey.class, NullWritable.class, conf).keys()
+          .map(new Function<AvroKey, Variant>() {
+        @Override
+        @SuppressWarnings("unchecked")
+        public Variant call(AvroKey avroKey) throws Exception {
+          return (Variant) avroKey.datum();
+        }
+      });
     } else if (inputFormat.equals("PARQUET")) {
-      @SuppressWarnings("unchecked")
-      Source<Variant> source =
-          new AvroParquetFileSource(inputPath, Avros.specifics(Variant.class));
-      variants = pipeline.read(source);
+      variants = context.newAPIHadoopFile(inputPath.toString(), AvroParquetInputFormat.class,
+          Void.class, Variant.class, conf).values();
     } else {
       throw new IllegalStateException("Unrecognized input format: " + inputFormat);
     }

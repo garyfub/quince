@@ -18,52 +18,48 @@ import com.google.common.collect.Iterables;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.vcf.VCFFileReader;
 import java.io.File;
-import java.io.IOException;
 import java.util.List;
-import org.apache.crunch.Emitter;
-import org.apache.crunch.Pair;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.LongWritable;
+import org.apache.spark.SparkConf;
+import org.apache.spark.api.java.JavaSparkContext;
+import org.apache.spark.broadcast.Broadcast;
 import org.ga4gh.models.Call;
 import org.ga4gh.models.Variant;
 import org.junit.Test;
+import org.opencb.hpg.bigdata.core.converters.variation.VariantContext2VariantConverter;
 import org.seqdoop.hadoop_bam.VariantContextWritable;
+import scala.Tuple2;
 
 import static org.junit.Assert.assertEquals;
 
 public class VCFToGA4GHVariantFnTest {
 
   @Test
-  public void testVCF() throws IOException {
+  public void testVCF() throws Exception {
     String input = "datasets/variants_vcf";
     File vcf = new File(input, "small.vcf");
 
     Configuration conf = new Configuration();
+    SparkConf sparkConf = new SparkConf()
+        .setMaster("local")
+        .setAppName(getClass().getSimpleName())
+        .set("spark.serializer", "org.apache.spark.serializer.KryoSerializer");
+    JavaSparkContext context = new JavaSparkContext(sparkConf);
     Path[] vcfs = new Path[] { new Path(vcf.toURI()) };
-    VCFToGA4GHVariantFn.configureHeaders(conf, vcfs, "default");
-    VCFToGA4GHVariantFn fn = new VCFToGA4GHVariantFn();
-    fn.setConfiguration(conf);
-    fn.initialize();
+    VariantContext2VariantConverter converter = VCFToGA4GHVariantFn.buildConverter(
+        conf, vcfs, "default");
+    Broadcast<VariantContext2VariantConverter> converterBroadcast =
+        context.broadcast(converter);
+    VCFToGA4GHVariantFn fn = new VCFToGA4GHVariantFn(converterBroadcast);
 
     VCFFileReader vcfFileReader = new VCFFileReader(vcf, false);
     VariantContext vc = Iterables.getFirst(vcfFileReader, null);
     VariantContextWritable vcw = new VariantContextWritable();
     vcw.set(vc);
 
-    class CapturingEmitter implements Emitter<Variant> {
-      Variant variant;
-      @Override
-      public void emit(Variant v) {
-        variant = v;
-      }
-      @Override
-      public void flush() { }
-    }
-
-    CapturingEmitter emitter = new CapturingEmitter();
-    fn.process(vcw, emitter);
-    Variant v = emitter.variant;
+    Variant v = fn.call(new Tuple2<>((LongWritable) null, vcw));
     assertEquals(".", v.getId());
     assertEquals("", v.getVariantSetId());
     assertEquals("1", v.getReferenceName());
@@ -76,5 +72,7 @@ public class VCFToGA4GHVariantFnTest {
     assertEquals("NA12878", calls.get(0).getCallSetId());
     assertEquals(0, calls.get(0).getGenotype().get(0).intValue());
     assertEquals(1, calls.get(0).getGenotype().get(1).intValue());
+
+    context.close();
   }
 }

@@ -17,11 +17,13 @@ package com.cloudera.science.quince;
 
 import htsjdk.variant.vcf.VCFHeader;
 import htsjdk.variant.vcf.VCFHeaderLine;
-import org.apache.commons.codec.binary.Base64;
-import org.apache.commons.lang.SerializationUtils;
-import org.apache.crunch.MapFn;
+import java.io.IOException;
+import java.io.InputStream;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.spark.api.java.function.Function;
+import org.apache.spark.broadcast.Broadcast;
 import org.ga4gh.models.CallSet;
 import org.ga4gh.models.Variant;
 import org.ga4gh.models.VariantSet;
@@ -31,51 +33,30 @@ import org.opencb.hpg.bigdata.core.converters.variation.VariantContext2VariantCo
 import org.opencb.hpg.bigdata.core.converters.variation.VariantConverterContext;
 import org.opencb.hpg.bigdata.core.io.VcfBlockIterator;
 import org.seqdoop.hadoop_bam.VariantContextWritable;
+import scala.Tuple2;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.util.ArrayList;
-import java.util.List;
+public class VCFToGA4GHVariantFn implements
+    Function<Tuple2<LongWritable, VariantContextWritable>, Variant> {
 
-public class VCFToGA4GHVariantFn extends MapFn<VariantContextWritable, Variant> {
+  private Broadcast<VariantContext2VariantConverter> converterBroadcast;
 
-  private static final String VARIANT_HEADERS = "variantHeaders";
-  private static final String VARIANT_SET_ID = "quinceVariantSetId";
-  private static final String SAMPLE_GROUP = "sampleGroup";
+  public VCFToGA4GHVariantFn(Broadcast<VariantContext2VariantConverter>
+      converterBroadcast) {
+    this.converterBroadcast = converterBroadcast;
+  }
 
-  public static void configureHeaders(Configuration conf, Path[] vcfs, String sampleGroup)
-      throws IOException {
-    List<VCFHeader> headers = new ArrayList<>();
+  static VariantContext2VariantConverter buildConverter(Configuration conf, Path[] vcfs,
+      String sampleGroup) throws IOException {
+    VariantContext2VariantConverter converter = new VariantContext2VariantConverter();
+    VariantConverterContext variantConverterContext = new VariantConverterContext();
+
     for (Path vcf : vcfs) {
       InputStream inputStream = vcf.getFileSystem(conf).open(vcf);
       VcfBlockIterator iterator = new VcfBlockIterator(inputStream, new FullVcfCodec());
       VCFHeader header = iterator.getHeader();
-      header.addMetaDataLine(new VCFHeaderLine(VARIANT_SET_ID, vcf.getName()));
-      headers.add(header);
-    }
-    VCFHeader[] headersArray = headers.toArray(new VCFHeader[headers.size()]);
-    conf.set(VARIANT_HEADERS,
-        Base64.encodeBase64String(SerializationUtils.serialize(headersArray)));
-    if (sampleGroup != null) {
-      conf.set(SAMPLE_GROUP, sampleGroup);
-    }
-  }
-
-  private transient VariantContext2VariantConverter converter;
-  private transient VariantConverterContext variantConverterContext;
-
-  @Override
-  public void initialize() {
-    converter = new VariantContext2VariantConverter();
-    variantConverterContext = new VariantConverterContext();
-
-    byte[] variantHeaders = Base64.decodeBase64(getConfiguration().get(VARIANT_HEADERS));
-    VCFHeader[] headers = (VCFHeader[]) SerializationUtils.deserialize(variantHeaders);
-
-    for (VCFHeader header : headers) {
       VariantSet vs = new VariantSet();
-      vs.setId(header.getMetaDataLine(VARIANT_SET_ID).getValue());
-      vs.setDatasetId(getConfiguration().get(SAMPLE_GROUP)); // dataset = sample group
+      vs.setId(vcf.getName());
+      vs.setDatasetId(sampleGroup); // dataset = sample group
       VCFHeaderLine reference = header.getMetaDataLine("reference");
       vs.setReferenceSetId(reference == null ? "unknown" : reference.getValue());
 
@@ -90,10 +71,11 @@ public class VCFToGA4GHVariantFn extends MapFn<VariantContextWritable, Variant> 
       }
     }
     converter.setContext(variantConverterContext);
+    return converter;
   }
 
   @Override
-  public Variant map(VariantContextWritable input) {
-    return converter.forward(input.get());
+  public Variant call(Tuple2<LongWritable, VariantContextWritable> input) throws Exception {
+    return converterBroadcast.getValue().forward(input._2().get());
   }
 }

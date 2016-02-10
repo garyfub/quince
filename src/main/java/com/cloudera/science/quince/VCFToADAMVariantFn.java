@@ -16,39 +16,40 @@
 package com.cloudera.science.quince;
 
 import htsjdk.variant.variantcontext.VariantContext;
-import org.apache.crunch.DoFn;
-import org.apache.crunch.Emitter;
-import org.apache.crunch.Pair;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+import org.apache.spark.api.java.function.PairFlatMapFunction;
 import org.bdgenomics.adam.converters.VariantContextConverter;
 import org.bdgenomics.adam.models.SequenceDictionary;
 import org.bdgenomics.formats.avro.Genotype;
 import org.bdgenomics.formats.avro.Variant;
 import org.seqdoop.hadoop_bam.VariantContextWritable;
 import scala.Option;
+import scala.Tuple2;
 import scala.collection.JavaConversions;
 
-import java.util.Collection;
-import java.util.List;
+public class VCFToADAMVariantFn implements
+    PairFlatMapFunction<VariantContextWritable, Variant, Collection<Genotype>> {
 
-public class VCFToADAMVariantFn
-    extends DoFn<VariantContextWritable, Pair<Variant, Collection<Genotype>>> {
-  private transient VariantContextConverter vcc;
+  private VariantContextConverter vcc;
 
-  @Override
-  public void initialize() {
+  public VCFToADAMVariantFn() {
     vcc = new VariantContextConverter(Option.<SequenceDictionary>apply(null));
   }
 
   @Override
-  public void process(
-      VariantContextWritable input, Emitter<Pair<Variant, Collection<Genotype>>> emitter) {
+  public Iterable<Tuple2<Variant, Collection<Genotype>>> call(VariantContextWritable input) {
+
     VariantContext bvc = input.get();
     List<org.bdgenomics.adam.models.VariantContext> avcList =
         JavaConversions.seqAsJavaList(vcc.convert(bvc));
+    List<Tuple2<Variant, Collection<Genotype>>> pairs = new ArrayList<>();
     for (org.bdgenomics.adam.models.VariantContext avc : avcList) {
       Variant variant = avc.variant().variant();
       Collection<Genotype> genotypes = JavaConversions.asJavaCollection(avc.genotypes());
-      emitter.emit(Pair.of(variant, genotypes));
+      pairs.add(new Tuple2<>(variant, genotypes));
     }
+    return pairs;
   }
 }

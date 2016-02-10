@@ -23,18 +23,18 @@ import com.google.common.base.Splitter;
 import com.google.common.collect.Sets;
 import java.util.List;
 import java.util.Set;
-import org.apache.avro.specific.SpecificRecord;
-import org.apache.crunch.PTable;
-import org.apache.crunch.Pipeline;
-import org.apache.crunch.PipelineResult;
-import org.apache.crunch.Target;
-import org.apache.crunch.impl.mr.MRPipeline;
-import org.apache.crunch.io.parquet.AvroParquetPathPerKeyTarget;
+import org.apache.avro.Schema;
+import org.apache.avro.generic.GenericRecord;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
+import org.apache.spark.SparkConf;
+import org.apache.spark.api.java.JavaRDD;
+import org.apache.spark.api.java.JavaSparkContext;
+import org.apache.spark.sql.DataFrame;
+import org.apache.spark.sql.SaveMode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -89,6 +89,10 @@ public class LoadVariantsTool extends Configured implements Tool {
       description="The number of reducers to use.")
   private int numReducers = -1;
 
+  @Parameter(names="--spark-master",
+      description="The Spark Master.")
+  private String sparkMaster = "local";
+
   @Override
   public int run(String[] args) throws Exception {
     JCommander jc = new JCommander(this);
@@ -112,40 +116,63 @@ public class LoadVariantsTool extends Configured implements Tool {
     Path outputPath = new Path(outputPathString);
     outputPath = outputPath.getFileSystem(conf).makeQualified(outputPath);
 
-    Pipeline pipeline = new MRPipeline(getClass(), conf);
+    SparkConf sparkConf = new SparkConf()
+        .setMaster(sparkMaster)
+        .setAppName(getClass().getSimpleName())
+        .set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+        .set("spark.sql.parquet.compression.codec", "uncompressed");
+    // TODO: add command line args
 
-    VariantsLoader variantsLoader;
-    if (dataModel.equals("GA4GH")) {
-      variantsLoader = new GA4GHVariantsLoader();
-    } else if (dataModel.equals("ADAM")) {
-      variantsLoader = new ADAMVariantsLoader();
-    } else {
-      jc.usage();
-      return 1;
-    }
+    JavaSparkContext context = null;
+    try {
+      context = new JavaSparkContext(sparkConf);
 
-    Set<String> sampleSet = samples == null ? null :
-        Sets.newLinkedHashSet(Splitter.on(',').split(samples));
-
-    PTable<String, SpecificRecord> partitionKeyedRecords =
-        variantsLoader.loadPartitionedVariants(inputFormat, inputPath, conf, pipeline,
-            variantsOnly, flatten, sampleGroup, sampleSet, redistribute, segmentSize,
-            numReducers);
-
-    if (FileUtils.sampleGroupExists(outputPath, conf, sampleGroup)) {
-      if (overwrite) {
-        FileUtils.deleteSampleGroup(outputPath, conf, sampleGroup);
+      VariantsLoader variantsLoader;
+      if (dataModel.equals("GA4GH")) {
+        variantsLoader = new GA4GHVariantsLoader();
+      } else if (dataModel.equals("ADAM")) {
+        variantsLoader = new ADAMVariantsLoader();
       } else {
-        LOG.error("Sample group already exists: " + sampleGroup);
+        jc.usage();
         return 1;
       }
+
+      Set<String> sampleSet = samples == null ? null :
+          Sets.newLinkedHashSet(Splitter.on(',').split(samples));
+
+      JavaRDD<GenericRecord> partitionKeyedRecords =
+          variantsLoader.loadPartitionedVariants(inputFormat, inputPath, conf, context,
+              variantsOnly, flatten, sampleGroup, sampleSet, redistribute, segmentSize,
+              numReducers);
+
+      if (FileUtils.sampleGroupExists(outputPath, conf, sampleGroup)) {
+        if (overwrite) {
+          FileUtils.deleteSampleGroup(outputPath, conf, sampleGroup);
+        } else {
+          LOG.error("Sample group already exists: " + sampleGroup);
+          return 1;
+        }
+      }
+
+      Class specificRecordType = variantsLoader.getSpecificRecordType(variantsOnly,
+          flatten);
+      Schema specificRecordSchema = AvroUtils.getAvroSchema(specificRecordType);
+      Schema schema = AvroUtils.addPartitionColumns(specificRecordSchema,
+          sampleGroup != null);
+      DataFrame df = AvroUtils.createDataFrame(context, partitionKeyedRecords, schema);
+      String[] partitionColumns = sampleGroup == null ?
+          new String[] {AvroUtils.CHR_COLUMN, AvroUtils.POS_COLUMN} :
+          new String[] {AvroUtils.CHR_COLUMN, AvroUtils.POS_COLUMN, AvroUtils.SAMPLE_GROUP_COLUMN};
+      df.write()
+          .mode(SaveMode.Append)
+          .partitionBy(partitionColumns)
+          .parquet(outputPath.toString());
+
+    } finally {
+      context.close();
     }
 
-    pipeline.write(partitionKeyedRecords, new AvroParquetPathPerKeyTarget(outputPath),
-        Target.WriteMode.APPEND);
-
-    PipelineResult result = pipeline.done();
-    return result.succeeded() ? 0 : 1;
+    return 0;
   }
 
   public static void main(String[] args) throws Exception {

@@ -19,59 +19,62 @@ import java.io.IOException;
 import java.util.Collection;
 import java.util.Set;
 import org.apache.avro.specific.SpecificRecord;
-import org.apache.crunch.PCollection;
-import org.apache.crunch.PTable;
-import org.apache.crunch.Pair;
-import org.apache.crunch.Pipeline;
-import org.apache.crunch.TableSource;
-import org.apache.crunch.Tuple3;
-import org.apache.crunch.io.From;
-import org.apache.crunch.types.PType;
-import org.apache.crunch.types.avro.Avros;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.LongWritable;
+import org.apache.spark.api.java.JavaPairRDD;
+import org.apache.spark.api.java.JavaSparkContext;
+import org.bdgenomics.formats.avro.FlatGenotype;
+import org.bdgenomics.formats.avro.FlatVariant;
 import org.bdgenomics.formats.avro.Genotype;
 import org.bdgenomics.formats.avro.Variant;
 import org.seqdoop.hadoop_bam.VCFInputFormat;
 import org.seqdoop.hadoop_bam.VariantContextWritable;
+import scala.Tuple3;
 
 public class ADAMVariantsLoader extends VariantsLoader {
   @Override
-  public PTable<Tuple3<String, Long, String>, SpecificRecord>
+  protected JavaPairRDD<Tuple3<String, Long, String>, SpecificRecord>
     loadKeyedRecords(String inputFormat, Path inputPath, Configuration conf,
-        Pipeline pipeline, boolean variantsOnly, boolean flatten, String sampleGroup,
+        JavaSparkContext context, boolean variantsOnly, boolean flatten, String sampleGroup,
         Set<String> samples)
         throws IOException {
-    PCollection<Pair<org.bdgenomics.formats.avro.Variant, Collection<Genotype>>> adamRecords
-        = readVariants(inputFormat, inputPath, conf, pipeline, sampleGroup);
+    JavaPairRDD<org.bdgenomics.formats.avro.Variant, Collection<Genotype>> adamRecords =
+        readVariants(inputFormat, inputPath, conf, context, sampleGroup);
+
     // The data are now loaded into ADAM variant objects; convert to keyed SpecificRecords
     ADAMToKeyedSpecificRecordFn converter =
         new ADAMToKeyedSpecificRecordFn(variantsOnly, flatten, sampleGroup, samples);
-    @SuppressWarnings("unchecked")
-    PType<SpecificRecord> specificPType = Avros.specifics(converter.getSpecificRecordType());
-    return adamRecords.parallelDo("Convert to keyed SpecificRecords",
-        converter, Avros.tableOf(KEY_PTYPE, specificPType));
+
+    return adamRecords.flatMapToPair(converter);
+  }
+
+  @Override
+  protected Class getSpecificRecordType(boolean variantsOnly, boolean flatten) {
+    if (variantsOnly && flatten) {
+      return FlatVariant.class;
+    } else if (variantsOnly && !flatten) {
+      return Variant.class;
+    } else if (!variantsOnly && flatten) {
+      return FlatGenotype.class;
+    } else {  // !variantsOnly && !flatten
+      return Genotype.class;
+    }
   }
 
   /*
    * Read input files (which may be VCF, Avro, or Parquet) and return a PCollection
    * of ADAM Variant/Genotype pairs.
    */
-  private static PCollection<Pair<Variant, Collection<Genotype>>>
+  private static JavaPairRDD<Variant, Collection<Genotype>>
       readVariants(String inputFormat, Path inputPath, Configuration conf,
-      Pipeline pipeline, String sampleGroup) throws IOException {
-    PCollection<Pair<Variant, Collection<Genotype>>> adamRecords;
+      JavaSparkContext context, String sampleGroup) throws IOException {
+    JavaPairRDD<Variant, Collection<Genotype>> adamRecords;
     if (inputFormat.equals("VCF")) {
-      TableSource<LongWritable, VariantContextWritable> vcfSource =
-          From.formattedFile(
-              inputPath, VCFInputFormat.class, LongWritable.class, VariantContextWritable.class);
-      PCollection<VariantContextWritable> vcfRecords = pipeline.read(vcfSource).values();
-      PType<Pair<Variant, Collection<Genotype>>> adamPType =
-          Avros.pairs(Avros.specifics(org.bdgenomics.formats.avro.Variant.class),
-              Avros.collections(Avros.specifics(Genotype.class)));
-      adamRecords =
-          vcfRecords.parallelDo("VCF to ADAM Variant", new VCFToADAMVariantFn(), adamPType);
+      JavaPairRDD<LongWritable, VariantContextWritable>
+          vcfRecords = context.newAPIHadoopFile(inputPath.toString(),
+            VCFInputFormat.class, LongWritable.class, VariantContextWritable.class, conf);
+      adamRecords = vcfRecords.values().flatMapToPair(new VCFToADAMVariantFn());
     } else if (inputFormat.equals("AVRO")) {
       throw new UnsupportedOperationException("Unsupported input format: " + inputFormat);
     } else if (inputFormat.equals("PARQUET")) {

@@ -15,23 +15,25 @@
 
 package com.cloudera.science.quince;
 
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Lists;
 import java.util.Collections;
+import java.util.List;
 import java.util.Set;
 import org.apache.avro.specific.SpecificRecord;
-import org.apache.crunch.DoFn;
-import org.apache.crunch.Emitter;
-import org.apache.crunch.Pair;
-import org.apache.crunch.Tuple3;
+import org.apache.spark.api.java.function.PairFlatMapFunction;
 import org.ga4gh.models.Call;
-import org.ga4gh.models.FlatVariantCall;
 import org.ga4gh.models.Variant;
+import scala.Tuple2;
+import scala.Tuple3;
 
 /**
  * Extract the key from a GA4GH {@link Variant} and optionally flatten the record and
  * expand genotype calls.
  */
 public class GA4GHToKeyedSpecificRecordFn
-    extends DoFn<Variant, Pair<Tuple3<String, Long, String>, SpecificRecord>> {
+    implements PairFlatMapFunction<Variant, Tuple3<String, Long, String>,
+        SpecificRecord> {
 
   private boolean variantsOnly;
   private boolean flatten;
@@ -47,39 +49,29 @@ public class GA4GHToKeyedSpecificRecordFn
   }
 
   @Override
-  public void process(Variant input,
-                      Emitter<Pair<Tuple3<String, Long, String>, SpecificRecord>> emitter) {
+  public Iterable<Tuple2<Tuple3<String, Long, String>, SpecificRecord>> call(
+      Variant input) {
     String contig = input.getReferenceName().toString();
     long pos = input.getStart();
     if (variantsOnly) {
-      Tuple3<String, Long, String> key = Tuple3.of(contig, pos, sampleGroup);
+      Tuple3<String, Long, String> key = new Tuple3<>(contig, pos, sampleGroup);
       SpecificRecord sr = flatten ? GA4GHVariantFlattener.flattenVariant(input) : input;
-      emitter.emit(Pair.of(key, sr));
+      return ImmutableList.of(new Tuple2<>(key, sr));
     } else {  // genotype calls
       Variant.Builder variantBuilder = Variant.newBuilder(input).clearCalls();
+      List<Tuple2<Tuple3<String, Long, String>, SpecificRecord>> tuples =
+          Lists.newArrayList();
       for (Call call : input.getCalls()) {
         if (samples == null || samples.contains(call.getCallSetId())) {
-          Tuple3<String, Long, String> key = Tuple3.of(contig, pos, sampleGroup);
+          Tuple3<String, Long, String> key = new Tuple3<>(contig, pos, sampleGroup);
           variantBuilder.setCalls(Collections.singletonList(call));
           Variant variant = variantBuilder.build();
           SpecificRecord sr = flatten ? GA4GHVariantFlattener.flattenCall(variant, call) : variant;
-          emitter.emit(Pair.of(key, sr));
+          tuples.add(new Tuple2<>(key, sr));
           variantBuilder.clearCalls();
         }
       }
+      return tuples;
     }
-  }
-
-  @Override
-  public float scaleFactor() {
-    // If the variant information is of size <i>v</i> (bytes) and the call information is
-    // <i>c</i> then the scale factor is <i>n(v + c) / (v + nc)</i> for <i>n</i> calls.
-    // If we assume that <i>v</i> is <i>2c</i> (as determined by a simple measurement),
-    // then the scale factor works out at about 3.
-    return variantsOnly ? super.scaleFactor() : 3.0f;
-  }
-
-  public Class getSpecificRecordType() {
-    return flatten ? FlatVariantCall.class : Variant.class;
   }
 }
