@@ -16,6 +16,7 @@
 package com.cloudera.science.quince;
 
 import com.databricks.spark.avro.SchemaConverters;
+import com.databricks.spark.avro.SchemaConverters$;
 import java.util.ArrayList;
 import java.util.List;
 import org.apache.avro.Schema;
@@ -90,13 +91,15 @@ public final class AvroUtils {
   public static <T extends IndexedRecord> DataFrame createDataFrame(
       JavaSparkContext context, JavaRDD<T> rdd, Schema schema) {
     SQLContext sqlContext = new SQLContext(context);
-    SchemaConverters.SchemaType schemaType = SchemaConverters.toSqlType(schema);
+    // Need to go through MODULE$ since SchemaConverters#toSqlType is not public.
+    SchemaConverters.SchemaType schemaType =
+        SchemaConverters$.MODULE$.toSqlType(schema);
     StructType structType = (StructType) schemaType.dataType();
-    // The following requires https://github.com/databricks/spark-avro/pull/89, which is
-    // not going to be merged, so we need to build it wourselves (or include code in this
-    // project).
+    // Need to go through MODULE$ since SchemaConverters#createConverterToSQL is not
+    // public. Note that https://github.com/databricks/spark-avro/pull/89 proposes to
+    // make it public, but it's not going to be merged.
     final Function1<Object, Object> converter =
-        SchemaConverters.createConverterToSQL(schema);
+        SchemaConverters$.MODULE$.createConverterToSQL(schema);
     JavaRDD<Row> rows = rdd.map(new Function<T, Row>() {
       @Override
       @SuppressWarnings("unchecked")
